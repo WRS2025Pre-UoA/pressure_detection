@@ -3,7 +3,7 @@ import numpy as np
 import math
 
 # --- 画像読み込み ---
-img = cv2.imread("pic_1.png")
+img = cv2.imread("pic_2.png")
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 # --- 円検出（中心と半径） ---
