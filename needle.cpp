@@ -115,6 +115,8 @@ static double pressure_from_angles(double min_angle, double max_angle,
     return min_val+frac*(max_val-min_val);
 }
 
+// ... detect_min_max_angles と pressure_from_angles はそのまま ...
+
 int main(int argc,char*argv[]){
     std::string path="../cropped/pic_0.png"; // 入力画像
     cv::Mat img=cv::imread(path);
@@ -125,7 +127,13 @@ int main(int argc,char*argv[]){
     auto[min_angle,max_angle]=detect_min_max_angles(gray,center,radius);
     std::cout<<"min_angle="<<min_angle<<", max_angle="<<max_angle<<std::endl;
 
-    // 針の直線をHoughで取得
+    // --- 中点角度と基準線 ---
+    double gap = fmod(max_angle - min_angle + 360.0, 360.0);
+    double mid_angle = fmod(min_angle + gap/2.0, 360.0);
+    double rotated_mid_angle = fmod(mid_angle + 180.0, 360.0);
+    std::cout<<"mid_angle="<<mid_angle<<", rotated="<<rotated_mid_angle<<std::endl;
+
+    // 針検出
     cv::Mat edges; cv::Canny(gray,edges,50,150);
     cv::Mat mask=cv::Mat::zeros(edges.size(),CV_8UC1);
     cv::circle(mask,center,int(radius*0.90),255,-1);
@@ -151,6 +159,27 @@ int main(int argc,char*argv[]){
     // 可視化
     cv::circle(img,center,radius,cv::Scalar(0,0,255),2);
     cv::line(img,cv::Point(best[0],best[1]),cv::Point(best[2],best[3]),cv::Scalar(0,255,0),2);
+
+    // min_angle 青丸, max_angle 赤丸
+    auto draw_point=[&](double ang, cv::Scalar col){
+        double rad=ang*CV_PI/180.0;
+        int px=center.x+int(radius*0.95*cos(rad));
+        int py=center.y-int(radius*0.95*sin(rad));
+        cv::circle(img,cv::Point(px,py),6,col,-1);
+    };
+    draw_point(min_angle, cv::Scalar(255,0,0)); // 青
+    draw_point(max_angle, cv::Scalar(0,0,255)); // 赤
+
+    // 中点 (緑線) と 180°回転 (紫線)
+    auto draw_line=[&](double ang, cv::Scalar col){
+        double rad=ang*CV_PI/180.0;
+        int px=center.x+int(radius*0.95*cos(rad));
+        int py=center.y-int(radius*0.95*sin(rad));
+        cv::line(img,center,cv::Point(px,py),col,2);
+    };
+    draw_line(mid_angle, cv::Scalar(0,255,0));      // 緑線
+    draw_line(rotated_mid_angle, cv::Scalar(255,0,255)); // 紫線
+
     cv::imshow("Result",img);
     cv::waitKey(0);
     return 0;
