@@ -5,12 +5,16 @@
 #include <limits>
 
 // -----------------------------------------
-// 最小・最大目盛りの角度を検出する（外周マスク＋ヒストグラム法）
+// 扇形マスクで外周目盛りの角度を検出
 // -----------------------------------------
-static std::pair<double,double> detect_min_max_angles(const cv::Mat& gray, cv::Point& center, int& radius) {
+static std::pair<double,double> detect_min_max_angles_sector(const cv::Mat& gray,
+                                                            cv::Point& center, int& radius,
+                                                            double r_in=0.80, double r_out=0.88,
+                                                            int ang_start=180, int ang_end=360) {
     cv::Mat gb;
     cv::GaussianBlur(gray, gb, cv::Size(5,5), 0);
 
+    // 円検出
     std::vector<cv::Vec3f> circles;
     cv::HoughCircles(gb, circles, cv::HOUGH_GRADIENT, 1.2, 100, 100, 30, 0, 0);
     if (circles.empty()) {
@@ -24,33 +28,46 @@ static std::pair<double,double> detect_min_max_angles(const cv::Mat& gray, cv::P
     cv::Mat edges;
     cv::Canny(gray, edges, 50, 150);
     cv::Mat mask = cv::Mat::zeros(edges.size(), CV_8UC1);
-    cv::circle(mask, center, int(radius*0.91), 255, -1);
-    cv::circle(mask, center, int(radius*0.75), 0, -1);
-    cv::Mat ticks;
-    cv::bitwise_and(edges, mask, ticks);
 
+    // 扇形マスクを生成
+    for (int ang=ang_start; ang<ang_end; ang++) {
+        double rad = ang * CV_PI / 180.0;
+        int x1 = center.x + int(radius*r_in*cos(rad));
+        int y1 = center.y - int(radius*r_in*sin(rad));
+        int x2 = center.x + int(radius*r_out*cos(rad));
+        int y2 = center.y - int(radius*r_out*sin(rad));
+        cv::line(mask, cv::Point(x1,y1), cv::Point(x2,y2), 255, 2);
+    }
+
+    cv::Mat ticks_area;
+    cv::bitwise_and(edges, mask, ticks_area);
+
+    // 角度分布を作成
     std::vector<double> angles;
-    for (int y=0; y<ticks.rows; y++) {
-        for (int x=0; x<ticks.cols; x++) {
-            if (ticks.at<uchar>(y,x) > 0) {
+    for (int y=0; y<ticks_area.rows; y++) {
+        for (int x=0; x<ticks_area.cols; x++) {
+            if (ticks_area.at<uchar>(y,x) > 0) {
                 double dx = x - center.x;
                 double dy = center.y - y;
                 double ang = atan2(dy, dx) * 180.0 / CV_PI;
                 if (ang < 0) ang += 360.0;
-                if (ang >= 180) angles.push_back(ang);
+                if (ang_start <= ang && ang <= ang_end) {
+                    angles.push_back(ang);
+                }
             }
         }
     }
 
-    const int bins = 180;
-    std::vector<int> hist(bins,0);
-    for (double a: angles) {
-        int idx = int(a) - 180;
+    // ヒストグラム
+    int bins = ang_end - ang_start;
+    std::vector<int> hist(bins, 0);
+    for (double a : angles) {
+        int idx = int(a) - ang_start;
         if (0 <= idx && idx < bins) hist[idx]++;
     }
 
     // 平滑化
-    std::vector<double> smooth(hist.size(),0.0);
+    std::vector<double> smooth(bins,0.0);
     for (int i=0; i<bins; i++) {
         for (int k=-3; k<=3; k++) {
             int j=(i+k+bins)%bins;
@@ -60,7 +77,7 @@ static std::pair<double,double> detect_min_max_angles(const cv::Mat& gray, cv::P
     }
 
     // 谷を探索
-    double thr=1.0;
+    double thr = 1.0;
     std::vector<bool> below(bins,false);
     for (int i=0; i<bins; i++) below[i]=smooth[i]<=thr;
 
@@ -77,8 +94,8 @@ static std::pair<double,double> detect_min_max_angles(const cv::Mat& gray, cv::P
 
     double min_angle=0,max_angle=0;
     if(best_s>=0){
-        int a1=(best_s%bins)+180;
-        int a2=(best_e%bins)+180;
+        int a1=(best_s%bins)+ang_start;
+        int a2=(best_e%bins)+ang_start;
         min_angle=std::min(a1,a2);
         max_angle=std::max(a1,a2);
     }
@@ -87,7 +104,7 @@ static std::pair<double,double> detect_min_max_angles(const cv::Mat& gray, cv::P
 }
 
 // -----------------------------------------
-// 針を検出し圧力値を返す
+// 針角度から圧力値を算出
 // -----------------------------------------
 static double pressure_from_angles(double min_angle, double max_angle,
                                    const cv::Point2d& center, const cv::Vec4i& line,
@@ -115,8 +132,6 @@ static double pressure_from_angles(double min_angle, double max_angle,
     return min_val+frac*(max_val-min_val);
 }
 
-// ... detect_min_max_angles と pressure_from_angles はそのまま ...
-
 int main(int argc,char*argv[]){
     std::string path="../cropped/pic_0.png"; // 入力画像
     cv::Mat img=cv::imread(path);
@@ -124,13 +139,14 @@ int main(int argc,char*argv[]){
     cv::Mat gray; cv::cvtColor(img,gray,cv::COLOR_BGR2GRAY);
 
     cv::Point center; int radius;
-    auto[min_angle,max_angle]=detect_min_max_angles(gray,center,radius);
+    auto[min_angle,max_angle]=detect_min_max_angles_sector(gray,center,radius);
     std::cout<<"min_angle="<<min_angle<<", max_angle="<<max_angle<<std::endl;
 
-    // --- 中点角度と基準線 ---
+    // 中点と基準線
     double gap = fmod(max_angle - min_angle + 360.0, 360.0);
     double mid_angle = fmod(min_angle + gap/2.0, 360.0);
     double rotated_mid_angle = fmod(mid_angle + 180.0, 360.0);
+
     std::cout<<"mid_angle="<<mid_angle<<", rotated="<<rotated_mid_angle<<std::endl;
 
     // 針検出
@@ -160,7 +176,6 @@ int main(int argc,char*argv[]){
     cv::circle(img,center,radius,cv::Scalar(0,0,255),2);
     cv::line(img,cv::Point(best[0],best[1]),cv::Point(best[2],best[3]),cv::Scalar(0,255,0),2);
 
-    // min_angle 青丸, max_angle 赤丸
     auto draw_point=[&](double ang, cv::Scalar col){
         double rad=ang*CV_PI/180.0;
         int px=center.x+int(radius*0.95*cos(rad));
@@ -170,7 +185,6 @@ int main(int argc,char*argv[]){
     draw_point(min_angle, cv::Scalar(255,0,0)); // 青
     draw_point(max_angle, cv::Scalar(0,0,255)); // 赤
 
-    // 中点 (緑線) と 180°回転 (紫線)
     auto draw_line=[&](double ang, cv::Scalar col){
         double rad=ang*CV_PI/180.0;
         int px=center.x+int(radius*0.95*cos(rad));
